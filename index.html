@@ -127,26 +127,28 @@
     })();
 
     // ---------- grupa kart ----------
-    const sphere = new THREE.Group();
-    scene.add(sphere);
+    // karty żyją bezpośrednio w scenie (NIE w obracanej grupie) — dzięki temu ich
+    // orientacja nigdy nie dziedziczy obrotu i zostają idealnie płaskie do ekranu.
     let cards = [];
 
-    // Fibonacci sphere z regulowaną losowością
+    // Rozkład WYPEŁNIAJĄCY OBJĘTOŚĆ kuli (nie tylko skorupę) — daje głębię, brak pustego środka.
     function distributePoints(n, radius, randomness) {
       const pts = [];
       const golden = Math.PI * (3 - Math.sqrt(5));
       for (let i = 0; i < n; i++) {
+        // kierunek: Fibonacci (równy) z domieszką losowości
         let y = 1 - (i / (n - 1)) * 2;
         let theta = golden * i;
-        // domieszka losowości: przesuwamy kąt i wysokość
         y += (Math.random() - 0.5) * randomness * 0.9;
         theta += (Math.random() - 0.5) * randomness * Math.PI;
         y = THREE.MathUtils.clamp(y, -1, 1);
-        const r = Math.sqrt(Math.max(0, 1 - y * y));
-        const dir = new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).normalize();
-        // lekki jitter promienia, żeby nie leżały idealnie na jednej skorupie
-        const rr = radius * (1 + (Math.random() - 0.5) * randomness * 0.35);
-        pts.push(dir.multiplyScalar(rr));
+        const rr = Math.sqrt(Math.max(0, 1 - y * y));
+        const dir = new THREE.Vector3(Math.cos(theta) * rr, y, Math.sin(theta) * rr).normalize();
+
+        // promień: rozłóż karty w CAŁEJ objętości, od ~15% do 100% R.
+        // cbrt daje równomierne wypełnienie objętości (inaczej tłok w środku).
+        const frac = 0.15 + 0.85 * Math.cbrt(Math.random());
+        pts.push(dir.multiplyScalar(radius * frac));
       }
       return pts;
     }
@@ -196,7 +198,7 @@
 
     function disposeCards() {
       for (const c of cards) {
-        sphere.remove(c);
+        scene.remove(c);
         c.geometry.dispose();
         c.material.dispose();
       }
@@ -218,11 +220,13 @@
           const geo = new THREE.PlaneGeometry(w, h);
           const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: true });
           const mesh = new THREE.Mesh(geo, mat);
+          // zapamiętujemy pozycję bazową; obrót liczymy ręcznie na pozycji (nie na transformie)
+          mesh.userData.basePos = positions[i].clone();
           mesh.position.copy(positions[i]);
           mesh.userData.baseW = w;
           mesh.userData.baseH = h;
 
-          sphere.add(mesh);
+          scene.add(mesh);
           cards.push(mesh);
         }));
       }
@@ -275,45 +279,51 @@
 
     // ---------- animacja ----------
     const clock = new THREE.Clock();
-    const worldPos = new THREE.Vector3();
-    const camDir = new THREE.Vector3();
+    const camPos = new THREE.Vector3();
+    let spinY = 0;            // kąt obrotu chmury wokół osi Y (tylko POZYCJE)
+    let prevT = 0;
 
     function animate() {
       requestAnimationFrame(animate);
       const t = clock.getElapsedTime();
+      const dt = Math.min(0.05, t - prevT); prevT = t;
 
-      sphere.rotation.y += 0.0008 * (state.rotSpeed * 3.2);
-      sphere.rotation.x = Math.sin(t * 0.15) * 0.10;
+      // obrót „sfery" = obracamy tylko pozycje kart wokół Y; orientacja zostaje płaska
+      spinY += dt * (state.rotSpeed * 0.6);
+      const tiltX = Math.sin(t * 0.15) * 0.10;   // delikatny „oddech"
+      const cosY = Math.cos(spinY), sinY = Math.sin(spinY);
+      const cosX = Math.cos(tiltX), sinX = Math.sin(tiltX);
 
-      camera.getWorldPosition(camDir); // pozycja kamery
+      camera.getWorldPosition(camPos);
+      const camDist = camera.position.length();
+      const near = Math.max(1, camDist - state.radius);
+      const far = camDist + state.radius;
 
       for (const card of cards) {
-        card.getWorldPosition(worldPos);
+        const b = card.userData.basePos;
+        // rotacja Y
+        let x = b.x * cosY + b.z * sinY;
+        let z = -b.x * sinY + b.z * cosY;
+        let y = b.y;
+        // lekki tilt X (oddech)
+        const y2 = y * cosX - z * sinX;
+        const z2 = y * sinX + z * cosX;
+        card.position.set(x, y2, z2);
 
-        // Karta ZAWSZE płasko przodem do ekranu — obrót sfery zmienia tylko pozycję, nie orientację.
+        // Karta ZAWSZE płasko przodem do ekranu (billboard do kamery), bez dziedziczenia obrotu.
         card.quaternion.copy(camera.quaternion);
 
-        // GŁĘBIA: liczymy dystans kamera→karta. Blisko = ostro/jasno; daleko = ciemno/mniejsze.
-        const dist = worldPos.distanceTo(camDir);
-        // zakres: przód sfery ~ (camDist - radius) ... tył ~ (camDist + radius)
-        const camDist = camera.position.length();
-        const near = Math.max(1, camDist - state.radius);
-        const far = camDist + state.radius;
+        // GŁĘBIA: dystans kamera→karta. Blisko = ostro/jasno; daleko = ciemno/mniejsze.
+        const dist = card.position.distanceTo(camPos);
         const norm = 1 - THREE.MathUtils.clamp((dist - near) / (far - near), 0, 1); // 1=przód, 0=tył
 
-        const bright = 0.32 + norm * 0.68;
-        card.material.color.setScalar(bright);
+        card.material.color.setScalar(0.32 + norm * 0.68);
         card.material.opacity = 0.5 + norm * 0.5;
-
-        const depthScale = 0.8 + norm * 0.2;
-        const s = state.cardScale * depthScale;
-        card.scale.setScalar(s);
-
+        card.scale.setScalar(state.cardScale * (0.8 + norm * 0.2));
         card.renderOrder = Math.round(norm * 100);
       }
 
-      // Ognisko DoF podąża za przodem sfery: ostre tam, gdzie zdjęcia są najbliżej kamery.
-      const camDist = camera.position.length();
+      // Ognisko DoF na przodzie chmury: ostre tam, gdzie zdjęcia najbliżej kamery.
       bokeh.uniforms['focus'].value = Math.max(1, camDist - state.radius * 0.85);
 
       controls.update();
