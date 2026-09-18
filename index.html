@@ -42,14 +42,13 @@
     <h1>Sfera 3D</h1>
     <div class="row"><label>Liczba zdjęć</label><input id="count" type="range" min="6" max="90" value="26" /><span class="val" id="countV">26</span></div>
     <div class="row"><label>Rozmiar sfery</label><input id="radius" type="range" min="30" max="140" value="52" /><span class="val" id="radiusV">5.2</span></div>
-    <div class="row"><label>Skala kart</label><input id="cardScale" type="range" min="40" max="180" value="100" /><span class="val" id="cardScaleV">1.0</span></div>
+    <div class="row"><label>Skala kart</label><input id="cardScale" type="range" min="40" max="600" value="100" /><span class="val" id="cardScaleV">1.0</span></div>
     <div class="row"><label>Losowość</label><input id="random" type="range" min="0" max="100" value="15" /><span class="val" id="randomV">15</span></div>
     <div class="grp"></div>
     <div class="row"><label>Obrót</label><input id="speed" type="range" min="0" max="100" value="30" /><span class="val" id="speedV">30</span></div>
     <div class="row"><label>Rozmycie (DoF)</label><input id="dof" type="range" min="0" max="100" value="55" /><span class="val" id="dofV">55</span></div>
     <div class="row"><label>Bloom</label><input id="bloom" type="range" min="0" max="100" value="40" /><span class="val" id="bloomV">40</span></div>
-    <div class="row toggle"><label for="enface">En face (płasko)</label><input id="enface" type="checkbox" checked /></div>
-    <div class="hint">Przeciągnij = obróć · scroll = zoom · zmiana liczby/losowości przebudowuje scenę</div>
+    <div class="hint">Przeciągnij = obróć · scroll = zoom · karty zawsze płasko do ekranu</div>
   </div>
 
   <script type="importmap">
@@ -77,7 +76,6 @@
       cardScale: 1.0,
       randomness: 0.15,
       rotSpeed: 0.30,
-      enface: true,     // płasko, styczne do sfery, twarzą na zewnątrz
     };
 
     // ---------- renderer / scene / camera ----------
@@ -224,13 +222,6 @@
           mesh.userData.baseW = w;
           mesh.userData.baseH = h;
 
-          // ramka
-          const frameGeo = new THREE.PlaneGeometry(w + 0.08, h + 0.08);
-          const frameMat = new THREE.MeshBasicMaterial({ color: 0x11151f, transparent: true, opacity: 0.9, fog: true });
-          const frame = new THREE.Mesh(frameGeo, frameMat);
-          frame.position.z = -0.01;
-          mesh.add(frame);
-
           sphere.add(mesh);
           cards.push(mesh);
         }));
@@ -266,7 +257,6 @@
     $('cardScale').addEventListener('input', e => { state.cardScale = +e.target.value / 100; setV('cardScaleV', state.cardScale.toFixed(2)); });
     $('random').addEventListener('input', e => { state.randomness = +e.target.value / 100; setV('randomV', e.target.value); scheduleRebuild(); });
     $('speed').addEventListener('input', e => { state.rotSpeed = +e.target.value / 100; setV('speedV', e.target.value); });
-    $('enface').addEventListener('change', e => { state.enface = e.target.checked; });
 
     $('dof').addEventListener('input', e => {
       const v = +e.target.value / 100;
@@ -286,10 +276,7 @@
     // ---------- animacja ----------
     const clock = new THREE.Clock();
     const worldPos = new THREE.Vector3();
-    const outward = new THREE.Vector3();
     const camDir = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
-    const m = new THREE.Matrix4();
 
     function animate() {
       requestAnimationFrame(animate);
@@ -303,18 +290,8 @@
       for (const card of cards) {
         card.getWorldPosition(worldPos);
 
-        if (state.enface) {
-          // płasko na sferze: normalna = kierunek od środka sfery na zewnątrz.
-          const sphereCenter = sphere.getWorldPosition(outward.set(0,0,0));
-          outward.copy(worldPos).sub(sphereCenter).normalize();
-          // ustaw kartę tak, by patrzyła w kierunku "outward" (styczna do kuli)
-          const lookTarget = worldPos.clone().add(outward);
-          card.up.copy(up);
-          card.lookAt(lookTarget);
-        } else {
-          // billboard: zawsze twarzą do kamery
-          card.quaternion.copy(camera.quaternion);
-        }
+        // Karta ZAWSZE płasko przodem do ekranu — obrót sfery zmienia tylko pozycję, nie orientację.
+        card.quaternion.copy(camera.quaternion);
 
         // GŁĘBIA: liczymy dystans kamera→karta. Blisko = ostro/jasno; daleko = ciemno/mniejsze.
         const dist = worldPos.distanceTo(camDir);
