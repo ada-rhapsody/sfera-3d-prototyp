@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sfera 3D — prototyp</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #05060a; }
+    #app { position: fixed; inset: 0; }
+    canvas { display: block; }
+
+    #ui {
+      position: fixed; left: 16px; bottom: 16px; z-index: 10;
+      font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #cbd2e0; background: rgba(12,14,22,0.72);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
+      padding: 14px 16px; max-width: 260px; user-select: none;
+    }
+    #ui h1 { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #e8ecf5; margin-bottom: 10px; }
+    #ui .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
+    #ui label { color: #9aa4ba; }
+    #ui input[type=range] { width: 120px; accent-color: #6ea8ff; }
+    #ui .hint { margin-top: 10px; font-size: 11px; color: #6b7488; line-height: 1.5; }
+    #loader {
+      position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
+      font: 14px -apple-system, sans-serif; color: #9aa4ba; background: #05060a;
+      transition: opacity .6s ease; letter-spacing: .05em;
+    }
+    #loader.hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="loader">ładowanie sceny…</div>
+  <div id="ui">
+    <h1>Sfera 3D</h1>
+    <div class="row"><label>Obrót</label><input id="speed" type="range" min="0" max="100" value="30" /></div>
+    <div class="row"><label>Bokeh (DoF)</label><input id="dof" type="range" min="0" max="100" value="55" /></div>
+    <div class="row"><label>Bloom</label><input id="bloom" type="range" min="0" max="100" value="40" /></div>
+    <div class="hint">Przeciągnij, aby obrócić · scroll = zoom · karty na niewidzialnej sferze</div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // ---------- config ----------
+    const CARD_COUNT = 26;
+    const SPHERE_RADIUS = 5.2;
+    const CARD_W = 1.55, CARD_H = 1.1;
+
+    // ---------- renderer / scene / camera ----------
+    const app = document.getElementById('app');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    app.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x05060a);
+    // Mgła = przyciemnienie/atmosfera wraz z głębią
+    scene.fog = new THREE.FogExp2(0x05060a, 0.055);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 0, 13);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.06;
+    controls.enablePan = false;
+    controls.minDistance = 8;
+    controls.maxDistance = 20;
+    controls.autoRotate = false;
+
+    // ---------- lighting (kinowe, delikatne) ----------
+    scene.add(new THREE.AmbientLight(0x404a63, 1.1));
+    const key = new THREE.DirectionalLight(0xfff0e0, 1.6);
+    key.position.set(6, 4, 8);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x6ea8ff, 0.8);
+    rim.position.set(-7, -2, -6);
+    scene.add(rim);
+
+    // ---------- gwiazdy w tle (kosmos) ----------
+    (function addStars() {
+      const g = new THREE.BufferGeometry();
+      const n = 900, pos = new Float32Array(n * 3);
+      for (let i = 0; i < n; i++) {
+        const r = 40 + Math.random() * 40;
+        const t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
+        pos[i*3]   = r * Math.sin(p) * Math.cos(t);
+        pos[i*3+1] = r * Math.sin(p) * Math.sin(t);
+        pos[i*3+2] = r * Math.cos(p);
+      }
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const m = new THREE.PointsMaterial({ color: 0x9fb0d0, size: 0.12, transparent: true, opacity: 0.7, depthWrite: false });
+      scene.add(new THREE.Points(g, m));
+    })();
+
+    // ---------- grupa kart (obracamy JĄ, nie kamerę) ----------
+    const sphere = new THREE.Group();
+    scene.add(sphere);
+
+    // Fibonacci sphere — równomierny rozkład punktów
+    function fibonacciSphere(n, radius) {
+      const pts = [];
+      const golden = Math.PI * (3 - Math.sqrt(5));
+      for (let i = 0; i < n; i++) {
+        const y = 1 - (i / (n - 1)) * 2;
+        const r = Math.sqrt(1 - y * y);
+        const theta = golden * i;
+        pts.push(new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).multiplyScalar(radius));
+      }
+      return pts;
+    }
+
+    // Placeholder-loader: Picsum → fallback kolorowa plansza
+    const loaderTex = new THREE.TextureLoader();
+    loaderTex.crossOrigin = 'anonymous';
+    const palette = ['#ff6b6b','#4ecdc4','#ffd93d','#6ea8ff','#c77dff','#95e1d3','#f38181','#aa96da','#fcbad3','#a8d8ea','#ffaaa5','#6a89cc'];
+
+    function fallbackTexture(i) {
+      const c = document.createElement('canvas'); c.width = 512; c.height = 384;
+      const ctx = c.getContext('2d');
+      const a = palette[i % palette.length];
+      const b = palette[(i * 5 + 3) % palette.length];
+      const grad = ctx.createLinearGradient(0, 0, 512, 384);
+      grad.addColorStop(0, a); grad.addColorStop(1, b);
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, 512, 384);
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.font = 'bold 120px -apple-system, sans-serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), 256, 200);
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      return t;
+    }
+
+    function loadCardTexture(i) {
+      return new Promise((resolve) => {
+        const seed = 100 + i;
+        const url = `https://picsum.photos/seed/${seed}/512/384`;
+        loaderTex.load(
+          url,
+          (tex) => { tex.colorSpace = THREE.SRGBColorSpace; resolve(tex); },
+          undefined,
+          () => resolve(fallbackTexture(i)) // błąd sieci → kolorowa plansza
+        );
+      });
+    }
+
+    // rounded-rect frame dla karty (subtelna ramka/tło)
+    const cards = [];
+    const positions = fibonacciSphere(CARD_COUNT, SPHERE_RADIUS);
+
+    async function buildCards() {
+      const geo = new THREE.PlaneGeometry(CARD_W, CARD_H);
+      const texes = await Promise.all(positions.map((_, i) => loadCardTexture(i)));
+
+      positions.forEach((pos, i) => {
+        const mat = new THREE.MeshBasicMaterial({
+          map: texes[i],
+          transparent: true,
+          fog: true,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.copy(pos);
+
+        // subtelna ramka
+        const frameGeo = new THREE.PlaneGeometry(CARD_W + 0.09, CARD_H + 0.09);
+        const frameMat = new THREE.MeshBasicMaterial({ color: 0x11151f, transparent: true, opacity: 0.9, fog: true });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        frame.position.z = -0.01;
+        mesh.add(frame);
+
+        sphere.add(mesh);
+        cards.push(mesh);
+      });
+    }
+
+    // ---------- post-processing: DoF bokeh + bloom ----------
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+
+    const bokeh = new BokehPass(scene, camera, {
+      focus: 13.0,      // ostrość na froncie kuli (dystans kamera→przód)
+      aperture: 0.0016, // siła rozmycia
+      maxblur: 0.012,
+    });
+    composer.addPass(bokeh);
+
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.5, 0.7, 0.85
+    );
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
+
+    // ---------- UI ----------
+    let rotSpeed = 0.30;
+    document.getElementById('speed').addEventListener('input', e => rotSpeed = e.target.value / 100);
+    document.getElementById('dof').addEventListener('input', e => {
+      const v = e.target.value / 100;
+      bokeh.uniforms['aperture'].value = 0.0004 + v * 0.0028;
+      bokeh.uniforms['maxblur'].value = 0.004 + v * 0.018;
+    });
+    document.getElementById('bloom').addEventListener('input', e => bloom.strength = (e.target.value / 100) * 1.1);
+
+    // ---------- animacja ----------
+    const clock = new THREE.Clock();
+    const tmp = new THREE.Vector3();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const t = clock.getElapsedTime();
+
+      // delikatny obrót grupy + "oddech"
+      sphere.rotation.y += 0.0008 * (rotSpeed * 3.2);
+      sphere.rotation.x = Math.sin(t * 0.15) * 0.12;
+
+      // billboarding + głębia (jasność/skala wg z względem kamery)
+      for (const card of cards) {
+        card.quaternion.copy(camera.quaternion); // zawsze do ekranu
+        card.getWorldPosition(tmp);
+        const depth = tmp.z; // im większe, tym bliżej kamery (kamera na +z)
+        const norm = THREE.MathUtils.clamp((depth + SPHERE_RADIUS) / (SPHERE_RADIUS * 2), 0, 1);
+        // przód: jasne + pełna skala; tył: przyciemnione + lekko mniejsze
+        const bright = 0.35 + norm * 0.65;
+        card.material.color.setScalar(bright);
+        const s = 0.82 + norm * 0.18;
+        card.scale.setScalar(s);
+        card.material.opacity = 0.55 + norm * 0.45;
+        card.renderOrder = Math.round(norm * 100);
+      }
+
+      controls.update();
+      composer.render();
+    }
+
+    // ---------- resize ----------
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- go ----------
+    buildCards().then(() => {
+      document.getElementById('loader').classList.add('hidden');
+      animate();
+    });
+  </script>
+</body>
+</html>
