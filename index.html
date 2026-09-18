@@ -218,7 +218,7 @@
         const w = aw * sizeMul, h = ah * sizeMul;
         jobs.push(loadCardTexture(i, w, h).then((tex) => {
           const geo = new THREE.PlaneGeometry(w, h);
-          const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: true });
+          const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: false, opacity: 1, fog: true });
           const mesh = new THREE.Mesh(geo, mat);
           // zapamiętujemy pozycję bazową; obrót liczymy ręcznie na pozycji (nie na transformie)
           mesh.userData.basePos = positions[i].clone();
@@ -318,9 +318,8 @@
         const norm = 1 - THREE.MathUtils.clamp((dist - near) / (far - near), 0, 1); // 1=przód, 0=tył
 
         card.material.color.setScalar(0.32 + norm * 0.68);
-        card.material.opacity = 0.5 + norm * 0.5;
         card.scale.setScalar(state.cardScale * (0.8 + norm * 0.2));
-        card.renderOrder = Math.round(norm * 100);
+        // karty są kryjące (100% opacity) — o zasłanianiu decyduje bufor głębi, bez renderOrder
       }
 
       // Ognisko DoF na przodzie chmury: ostre tam, gdzie zdjęcia najbliżej kamery.
