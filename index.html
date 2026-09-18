@@ -17,13 +17,16 @@
       color: #cbd2e0; background: rgba(12,14,22,0.72);
       backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
       border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;
-      padding: 14px 16px; max-width: 260px; user-select: none;
+      padding: 14px 16px; width: 250px; user-select: none;
     }
-    #ui h1 { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #e8ecf5; margin-bottom: 10px; }
-    #ui .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; }
-    #ui label { color: #9aa4ba; }
-    #ui input[type=range] { width: 120px; accent-color: #6ea8ff; }
-    #ui .hint { margin-top: 10px; font-size: 11px; color: #6b7488; line-height: 1.5; }
+    #ui h1 { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: #e8ecf5; margin-bottom: 12px; }
+    #ui .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 9px 0; }
+    #ui label { color: #9aa4ba; flex: 0 0 auto; }
+    #ui .val { color: #6ea8ff; font-variant-numeric: tabular-nums; font-size: 11px; min-width: 30px; text-align: right; }
+    #ui input[type=range] { flex: 1; accent-color: #6ea8ff; min-width: 0; }
+    #ui .grp { border-top: 1px solid rgba(255,255,255,0.07); margin-top: 10px; padding-top: 6px; }
+    #ui .toggle { cursor: pointer; }
+    #ui .hint { margin-top: 12px; font-size: 11px; color: #6b7488; line-height: 1.5; }
     #loader {
       position: fixed; inset: 0; display: grid; place-items: center; z-index: 20;
       font: 14px -apple-system, sans-serif; color: #9aa4ba; background: #05060a;
@@ -37,10 +40,16 @@
   <div id="loader">ładowanie sceny…</div>
   <div id="ui">
     <h1>Sfera 3D</h1>
-    <div class="row"><label>Obrót</label><input id="speed" type="range" min="0" max="100" value="30" /></div>
-    <div class="row"><label>Bokeh (DoF)</label><input id="dof" type="range" min="0" max="100" value="55" /></div>
-    <div class="row"><label>Bloom</label><input id="bloom" type="range" min="0" max="100" value="40" /></div>
-    <div class="hint">Przeciągnij, aby obrócić · scroll = zoom · karty na niewidzialnej sferze</div>
+    <div class="row"><label>Liczba zdjęć</label><input id="count" type="range" min="6" max="90" value="26" /><span class="val" id="countV">26</span></div>
+    <div class="row"><label>Rozmiar sfery</label><input id="radius" type="range" min="30" max="140" value="52" /><span class="val" id="radiusV">5.2</span></div>
+    <div class="row"><label>Skala kart</label><input id="cardScale" type="range" min="40" max="180" value="100" /><span class="val" id="cardScaleV">1.0</span></div>
+    <div class="row"><label>Losowość</label><input id="random" type="range" min="0" max="100" value="15" /><span class="val" id="randomV">15</span></div>
+    <div class="grp"></div>
+    <div class="row"><label>Obrót</label><input id="speed" type="range" min="0" max="100" value="30" /><span class="val" id="speedV">30</span></div>
+    <div class="row"><label>Rozmycie (DoF)</label><input id="dof" type="range" min="0" max="100" value="55" /><span class="val" id="dofV">55</span></div>
+    <div class="row"><label>Bloom</label><input id="bloom" type="range" min="0" max="100" value="40" /><span class="val" id="bloomV">40</span></div>
+    <div class="row toggle"><label for="enface">En face (płasko)</label><input id="enface" type="checkbox" checked /></div>
+    <div class="hint">Przeciągnij = obróć · scroll = zoom · zmiana liczby/losowości przebudowuje scenę</div>
   </div>
 
   <script type="importmap">
@@ -61,10 +70,15 @@
     import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
     import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
-    // ---------- config ----------
-    const CARD_COUNT = 26;
-    const SPHERE_RADIUS = 5.2;
-    const CARD_W = 1.55, CARD_H = 1.1;
+    // ---------- state (sterowane suwakami) ----------
+    const state = {
+      count: 26,
+      radius: 5.2,
+      cardScale: 1.0,
+      randomness: 0.15,
+      rotSpeed: 0.30,
+      enface: true,     // płasko, styczne do sfery, twarzą na zewnątrz
+    };
 
     // ---------- renderer / scene / camera ----------
     const app = document.getElementById('app');
@@ -77,21 +91,19 @@
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x05060a);
-    // Mgła = przyciemnienie/atmosfera wraz z głębią
-    scene.fog = new THREE.FogExp2(0x05060a, 0.055);
+    scene.fog = new THREE.FogExp2(0x05060a, 0.045);
 
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 200);
     camera.position.set(0, 0, 13);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.06;
     controls.enablePan = false;
-    controls.minDistance = 8;
-    controls.maxDistance = 20;
-    controls.autoRotate = false;
+    controls.minDistance = 6;
+    controls.maxDistance = 40;
 
-    // ---------- lighting (kinowe, delikatne) ----------
+    // ---------- lighting ----------
     scene.add(new THREE.AmbientLight(0x404a63, 1.1));
     const key = new THREE.DirectionalLight(0xfff0e0, 1.6);
     key.position.set(6, 4, 8);
@@ -100,163 +112,237 @@
     rim.position.set(-7, -2, -6);
     scene.add(rim);
 
-    // ---------- gwiazdy w tle (kosmos) ----------
+    // ---------- gwiazdy ----------
     (function addStars() {
       const g = new THREE.BufferGeometry();
       const n = 900, pos = new Float32Array(n * 3);
       for (let i = 0; i < n; i++) {
-        const r = 40 + Math.random() * 40;
+        const r = 60 + Math.random() * 60;
         const t = Math.random() * Math.PI * 2, p = Math.acos(2 * Math.random() - 1);
         pos[i*3]   = r * Math.sin(p) * Math.cos(t);
         pos[i*3+1] = r * Math.sin(p) * Math.sin(t);
         pos[i*3+2] = r * Math.cos(p);
       }
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      const m = new THREE.PointsMaterial({ color: 0x9fb0d0, size: 0.12, transparent: true, opacity: 0.7, depthWrite: false });
+      const m = new THREE.PointsMaterial({ color: 0x9fb0d0, size: 0.14, transparent: true, opacity: 0.7, depthWrite: false });
       scene.add(new THREE.Points(g, m));
     })();
 
-    // ---------- grupa kart (obracamy JĄ, nie kamerę) ----------
+    // ---------- grupa kart ----------
     const sphere = new THREE.Group();
     scene.add(sphere);
+    let cards = [];
 
-    // Fibonacci sphere — równomierny rozkład punktów
-    function fibonacciSphere(n, radius) {
+    // Fibonacci sphere z regulowaną losowością
+    function distributePoints(n, radius, randomness) {
       const pts = [];
       const golden = Math.PI * (3 - Math.sqrt(5));
       for (let i = 0; i < n; i++) {
-        const y = 1 - (i / (n - 1)) * 2;
-        const r = Math.sqrt(1 - y * y);
-        const theta = golden * i;
-        pts.push(new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).multiplyScalar(radius));
+        let y = 1 - (i / (n - 1)) * 2;
+        let theta = golden * i;
+        // domieszka losowości: przesuwamy kąt i wysokość
+        y += (Math.random() - 0.5) * randomness * 0.9;
+        theta += (Math.random() - 0.5) * randomness * Math.PI;
+        y = THREE.MathUtils.clamp(y, -1, 1);
+        const r = Math.sqrt(Math.max(0, 1 - y * y));
+        const dir = new THREE.Vector3(Math.cos(theta) * r, y, Math.sin(theta) * r).normalize();
+        // lekki jitter promienia, żeby nie leżały idealnie na jednej skorupie
+        const rr = radius * (1 + (Math.random() - 0.5) * randomness * 0.35);
+        pts.push(dir.multiplyScalar(rr));
       }
       return pts;
     }
 
-    // Placeholder-loader: Picsum → fallback kolorowa plansza
+    // ---------- tekstury ----------
     const loaderTex = new THREE.TextureLoader();
     loaderTex.crossOrigin = 'anonymous';
     const palette = ['#ff6b6b','#4ecdc4','#ffd93d','#6ea8ff','#c77dff','#95e1d3','#f38181','#aa96da','#fcbad3','#a8d8ea','#ffaaa5','#6a89cc'];
+    const texCache = new Map();
 
-    function fallbackTexture(i) {
-      const c = document.createElement('canvas'); c.width = 512; c.height = 384;
+    function fallbackTexture(i, w, h) {
+      const c = document.createElement('canvas'); c.width = 512; c.height = Math.round(512 * h / w);
       const ctx = c.getContext('2d');
       const a = palette[i % palette.length];
       const b = palette[(i * 5 + 3) % palette.length];
-      const grad = ctx.createLinearGradient(0, 0, 512, 384);
+      const grad = ctx.createLinearGradient(0, 0, c.width, c.height);
       grad.addColorStop(0, a); grad.addColorStop(1, b);
-      ctx.fillStyle = grad; ctx.fillRect(0, 0, 512, 384);
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, c.width, c.height);
       ctx.fillStyle = 'rgba(255,255,255,0.92)';
-      ctx.font = 'bold 120px -apple-system, sans-serif';
+      ctx.font = `bold ${Math.round(c.height*0.4)}px -apple-system, sans-serif`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(String(i + 1), 256, 200);
+      ctx.fillText(String(i + 1), c.width/2, c.height/2);
       const t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace;
       return t;
     }
 
-    function loadCardTexture(i) {
+    function loadCardTexture(i, w, h) {
+      const pw = 400, ph = Math.round(400 * h / w);
+      const key = `${i}-${pw}x${ph}`;
+      if (texCache.has(key)) return Promise.resolve(texCache.get(key));
       return new Promise((resolve) => {
-        const seed = 100 + i;
-        const url = `https://picsum.photos/seed/${seed}/512/384`;
+        const url = `https://picsum.photos/seed/${100 + i}/${pw}/${ph}`;
         loaderTex.load(
           url,
-          (tex) => { tex.colorSpace = THREE.SRGBColorSpace; resolve(tex); },
+          (tex) => { tex.colorSpace = THREE.SRGBColorSpace; texCache.set(key, tex); resolve(tex); },
           undefined,
-          () => resolve(fallbackTexture(i)) // błąd sieci → kolorowa plansza
+          () => { const t = fallbackTexture(i, w, h); texCache.set(key, t); resolve(t); }
         );
       });
     }
 
-    // rounded-rect frame dla karty (subtelna ramka/tło)
-    const cards = [];
-    const positions = fibonacciSphere(CARD_COUNT, SPHERE_RADIUS);
+    // różne proporcje: pion, poziom, kwadrat, panorama
+    const aspects = [
+      [1.55, 1.05], [1.05, 1.45], [1.3, 1.3], [1.9, 0.95], [1.15, 1.15], [1.7, 1.15], [0.95, 1.35]
+    ];
 
-    async function buildCards() {
-      const geo = new THREE.PlaneGeometry(CARD_W, CARD_H);
-      const texes = await Promise.all(positions.map((_, i) => loadCardTexture(i)));
-
-      positions.forEach((pos, i) => {
-        const mat = new THREE.MeshBasicMaterial({
-          map: texes[i],
-          transparent: true,
-          fog: true,
-        });
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.copy(pos);
-
-        // subtelna ramka
-        const frameGeo = new THREE.PlaneGeometry(CARD_W + 0.09, CARD_H + 0.09);
-        const frameMat = new THREE.MeshBasicMaterial({ color: 0x11151f, transparent: true, opacity: 0.9, fog: true });
-        const frame = new THREE.Mesh(frameGeo, frameMat);
-        frame.position.z = -0.01;
-        mesh.add(frame);
-
-        sphere.add(mesh);
-        cards.push(mesh);
-      });
+    function disposeCards() {
+      for (const c of cards) {
+        sphere.remove(c);
+        c.geometry.dispose();
+        c.material.dispose();
+      }
+      cards = [];
     }
 
-    // ---------- post-processing: DoF bokeh + bloom ----------
+    async function buildCards() {
+      disposeCards();
+      const n = state.count;
+      const positions = distributePoints(n, state.radius, state.randomness);
+      const jobs = [];
+
+      for (let i = 0; i < n; i++) {
+        const [aw, ah] = aspects[i % aspects.length];
+        // różne wielkości: mnożnik 0.7–1.35 (deterministyczny per index)
+        const sizeMul = 0.7 + ((Math.sin(i * 12.9898) * 43758.5453) % 1 + 1) % 1 * 0.65;
+        const w = aw * sizeMul, h = ah * sizeMul;
+        jobs.push(loadCardTexture(i, w, h).then((tex) => {
+          const geo = new THREE.PlaneGeometry(w, h);
+          const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, fog: true });
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.position.copy(positions[i]);
+          mesh.userData.baseW = w;
+          mesh.userData.baseH = h;
+
+          // ramka
+          const frameGeo = new THREE.PlaneGeometry(w + 0.08, h + 0.08);
+          const frameMat = new THREE.MeshBasicMaterial({ color: 0x11151f, transparent: true, opacity: 0.9, fog: true });
+          const frame = new THREE.Mesh(frameGeo, frameMat);
+          frame.position.z = -0.01;
+          mesh.add(frame);
+
+          sphere.add(mesh);
+          cards.push(mesh);
+        }));
+      }
+      await Promise.all(jobs);
+    }
+
+    // ---------- post-processing ----------
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
 
+    // DoF: focus = dystans do PRZODU sfery (blisko kamery). Ostre z przodu, rozmyte w głąb.
     const bokeh = new BokehPass(scene, camera, {
-      focus: 13.0,      // ostrość na froncie kuli (dystans kamera→przód)
-      aperture: 0.0016, // siła rozmycia
+      focus: 8.0,
+      aperture: 0.0018,
       maxblur: 0.012,
     });
     composer.addPass(bokeh);
 
     const bloom = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      0.5, 0.7, 0.85
+      0.44, 0.7, 0.9
     );
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
 
     // ---------- UI ----------
-    let rotSpeed = 0.30;
-    document.getElementById('speed').addEventListener('input', e => rotSpeed = e.target.value / 100);
-    document.getElementById('dof').addEventListener('input', e => {
-      const v = e.target.value / 100;
-      bokeh.uniforms['aperture'].value = 0.0004 + v * 0.0028;
-      bokeh.uniforms['maxblur'].value = 0.004 + v * 0.018;
+    const $ = id => document.getElementById(id);
+    const setV = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+
+    $('count').addEventListener('input', e => { state.count = +e.target.value; setV('countV', state.count); scheduleRebuild(); });
+    $('radius').addEventListener('input', e => { state.radius = +e.target.value / 10; setV('radiusV', state.radius.toFixed(1)); scheduleRebuild(); });
+    $('cardScale').addEventListener('input', e => { state.cardScale = +e.target.value / 100; setV('cardScaleV', state.cardScale.toFixed(2)); });
+    $('random').addEventListener('input', e => { state.randomness = +e.target.value / 100; setV('randomV', e.target.value); scheduleRebuild(); });
+    $('speed').addEventListener('input', e => { state.rotSpeed = +e.target.value / 100; setV('speedV', e.target.value); });
+    $('enface').addEventListener('change', e => { state.enface = e.target.checked; });
+
+    $('dof').addEventListener('input', e => {
+      const v = +e.target.value / 100;
+      bokeh.uniforms['aperture'].value = 0.0004 + v * 0.0032;
+      bokeh.uniforms['maxblur'].value = 0.003 + v * 0.02;
+      setV('dofV', e.target.value);
     });
-    document.getElementById('bloom').addEventListener('input', e => bloom.strength = (e.target.value / 100) * 1.1);
+    $('bloom').addEventListener('input', e => { bloom.strength = (+e.target.value / 100) * 1.1; setV('bloomV', e.target.value); });
+
+    // debounce przebudowy sceny (count/radius/random)
+    let rebuildTimer = null;
+    function scheduleRebuild() {
+      clearTimeout(rebuildTimer);
+      rebuildTimer = setTimeout(() => { buildCards(); }, 120);
+    }
 
     // ---------- animacja ----------
     const clock = new THREE.Clock();
-    const tmp = new THREE.Vector3();
+    const worldPos = new THREE.Vector3();
+    const outward = new THREE.Vector3();
+    const camDir = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+    const m = new THREE.Matrix4();
 
     function animate() {
       requestAnimationFrame(animate);
       const t = clock.getElapsedTime();
 
-      // delikatny obrót grupy + "oddech"
-      sphere.rotation.y += 0.0008 * (rotSpeed * 3.2);
-      sphere.rotation.x = Math.sin(t * 0.15) * 0.12;
+      sphere.rotation.y += 0.0008 * (state.rotSpeed * 3.2);
+      sphere.rotation.x = Math.sin(t * 0.15) * 0.10;
 
-      // billboarding + głębia (jasność/skala wg z względem kamery)
+      camera.getWorldPosition(camDir); // pozycja kamery
+
       for (const card of cards) {
-        card.quaternion.copy(camera.quaternion); // zawsze do ekranu
-        card.getWorldPosition(tmp);
-        const depth = tmp.z; // im większe, tym bliżej kamery (kamera na +z)
-        const norm = THREE.MathUtils.clamp((depth + SPHERE_RADIUS) / (SPHERE_RADIUS * 2), 0, 1);
-        // przód: jasne + pełna skala; tył: przyciemnione + lekko mniejsze
-        const bright = 0.35 + norm * 0.65;
+        card.getWorldPosition(worldPos);
+
+        if (state.enface) {
+          // płasko na sferze: normalna = kierunek od środka sfery na zewnątrz.
+          const sphereCenter = sphere.getWorldPosition(outward.set(0,0,0));
+          outward.copy(worldPos).sub(sphereCenter).normalize();
+          // ustaw kartę tak, by patrzyła w kierunku "outward" (styczna do kuli)
+          const lookTarget = worldPos.clone().add(outward);
+          card.up.copy(up);
+          card.lookAt(lookTarget);
+        } else {
+          // billboard: zawsze twarzą do kamery
+          card.quaternion.copy(camera.quaternion);
+        }
+
+        // GŁĘBIA: liczymy dystans kamera→karta. Blisko = ostro/jasno; daleko = ciemno/mniejsze.
+        const dist = worldPos.distanceTo(camDir);
+        // zakres: przód sfery ~ (camDist - radius) ... tył ~ (camDist + radius)
+        const camDist = camera.position.length();
+        const near = Math.max(1, camDist - state.radius);
+        const far = camDist + state.radius;
+        const norm = 1 - THREE.MathUtils.clamp((dist - near) / (far - near), 0, 1); // 1=przód, 0=tył
+
+        const bright = 0.32 + norm * 0.68;
         card.material.color.setScalar(bright);
-        const s = 0.82 + norm * 0.18;
+        card.material.opacity = 0.5 + norm * 0.5;
+
+        const depthScale = 0.8 + norm * 0.2;
+        const s = state.cardScale * depthScale;
         card.scale.setScalar(s);
-        card.material.opacity = 0.55 + norm * 0.45;
+
         card.renderOrder = Math.round(norm * 100);
       }
+
+      // Ognisko DoF podąża za przodem sfery: ostre tam, gdzie zdjęcia są najbliżej kamery.
+      const camDist = camera.position.length();
+      bokeh.uniforms['focus'].value = Math.max(1, camDist - state.radius * 0.85);
 
       controls.update();
       composer.render();
     }
 
-    // ---------- resize ----------
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -264,7 +350,6 @@
       composer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // ---------- go ----------
     buildCards().then(() => {
       document.getElementById('loader').classList.add('hidden');
       animate();
